@@ -1,40 +1,43 @@
 let port;
 let reader;
-let writer;
 let isReading = false;
+
+async function getSerialOptions() {
+    return {
+        baudRate: parseInt(document.getElementById("baudRate").value),
+        dataBits: parseInt(document.getElementById("dataBits").value),
+        stopBits: parseInt(document.getElementById("stopBits").value),
+        parity: document.getElementById("parity").value,
+        flowControl: document.getElementById("flowControl").value
+    };
+}
 
 document.getElementById("connectButton").addEventListener("click", async () => {
     try {
-        let baudRateValue = parseInt(document.getElementById("baudRate").value);
-        if (isNaN(baudRateValue) || baudRateValue <= 0) {
-            alert("Baud rate không hợp lệ! Vui lòng nhập số dương.");
-            return;
-        }
+        const options = await getSerialOptions();
 
         port = await navigator.serial.requestPort();
-        if (!port) {
-            alert("Không có thiết bị nào được chọn! Vui lòng chọn một cổng Serial.");
-            return;
-        }
-
-        await port.open({ baudRate: baudRateValue });
+        await port.open(options);
 
         document.getElementById("disconnectButton").disabled = false;
         document.getElementById("connectButton").disabled = true;
 
         readSerialData();
-    } catch (error) {
-        console.error("Lỗi kết nối Serial:", error);
-        alert("Lỗi kết nối Serial: " + error.message);
+    } catch (err) {
+        alert("Lỗi kết nối: " + err.message);
     }
 });
 
 document.getElementById("disconnectButton").addEventListener("click", async () => {
-    if (port) {
-        await port.close();
+    try {
+        isReading = false;
+        if (reader) await reader.cancel();
+        if (port && port.readable) await port.close();
+
         document.getElementById("disconnectButton").disabled = true;
         document.getElementById("connectButton").disabled = false;
-        isReading = false;
+    } catch (err) {
+        console.error("Lỗi ngắt kết nối:", err);
     }
 });
 
@@ -44,21 +47,24 @@ async function readSerialData() {
     const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
     reader = textDecoder.readable.getReader();
 
+    const output = document.getElementById("serialOutput");
+    const maxLength = 10000; // Giới hạn 10.000 ký tự tránh overflow
+
     try {
         while (isReading) {
             const { value, done } = await reader.read();
-            if (done) break;
+            if (done || !value) break;
 
-            if (typeof value !== "string") {
-                console.warn("Dữ liệu nhận được không phải chuỗi:", value);
-                continue;
+            const formatted = formatData(value);
+            output.value += formatted + "\n";
+
+            // Giới hạn buffer output
+            if (output.value.length > maxLength) {
+                output.value = output.value.slice(-maxLength);
             }
 
-            let formattedValue = formatData(value);
-            document.getElementById("serialOutput").value += formattedValue + "\n";
-
             if (document.getElementById("autoScroll").checked) {
-                document.getElementById("serialOutput").scrollTop = document.getElementById("serialOutput").scrollHeight;
+                output.scrollTop = output.scrollHeight;
             }
         }
     } catch (error) {
@@ -70,21 +76,26 @@ async function readSerialData() {
 
 document.getElementById("sendButton").addEventListener("click", async () => {
     if (!port || !port.writable) {
-        alert("Cổng Serial chưa sẵn sàng để gửi dữ liệu!");
+        alert("Cổng Serial chưa mở hoặc không sẵn sàng!");
         return;
     }
 
-    const textEncoder = new TextEncoder();
-    writer = port.writable.getWriter();
-    const data = document.getElementById("serialInput").value + "\n";
-    
+    const data = document.getElementById("serialInput").value.trim();
+    if (!data) {
+        alert("Không được gửi dữ liệu trống!");
+        return;
+    }
+
+    const encoder = new TextEncoder();
+    let writer;
+
     try {
-        await writer.write(textEncoder.encode(data));
-    } catch (error) {
-        console.error("Lỗi khi gửi dữ liệu:", error);
-        alert("Lỗi khi gửi dữ liệu: " + error.message);
+        writer = port.writable.getWriter();
+        await writer.write(encoder.encode(data + "\n"));
+    } catch (err) {
+        alert("Lỗi khi gửi: " + err.message);
     } finally {
-        writer.releaseLock();
+        if (writer) writer.releaseLock();
     }
 });
 
@@ -106,15 +117,11 @@ document.getElementById("darkMode").addEventListener("change", () => {
 });
 
 function formatData(data) {
-    if (typeof data !== "string") {
-        data = new TextDecoder().decode(data);
-    }
-
-    let format = document.getElementById("dataFormat").value;
+    const format = document.getElementById("dataFormat").value;
     if (format === "hex") {
-        return [...data].map(char => char.charCodeAt(0).toString(16)).join(" ");
+        return [...data].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
     } else if (format === "bin") {
-        return [...data].map(char => char.charCodeAt(0).toString(2)).join(" ");
+        return [...data].map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join(' ');
     }
     return data;
 }
