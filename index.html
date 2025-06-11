@@ -18,7 +18,7 @@
 </head>
 <body>
     <div class="container py-4">
-        <h1 class="text-center mb-4">CẤN TẤT TUẤN - 艮必俊</h1>
+        <h1 class="text-center mb-4">CẤN TẤT TUẤN - Web Serial Tool</h1>
 
         <div class="row g-3">
             <div class="col-md-4">
@@ -40,7 +40,7 @@
                 </select>
             </div>
             <div class="col-md-4">
-                <label for="parity">Kiểm tra chữ số</label>
+                <label for="parity">Kiểm tra chẵn lẻ</label>
                 <select id="parity" class="form-select">
                     <option value="none" selected>Không có</option>
                     <option value="even">Chẵn</option>
@@ -48,43 +48,167 @@
                 </select>
             </div>
             <div class="col-md-4">
-                <label for="bufferSize">Bộ đệm</label>
-                <input type="number" id="bufferSize" class="form-control" value="1024" disabled>
-            </div>
-            <div class="col-md-4">
                 <label for="flowControl">Kiểm soát lưu lượng</label>
                 <select id="flowControl" class="form-select">
                     <option value="none" selected>Không có</option>
-                    <option value="hardware">Hardware (RTS/CTS)</option>
+                    <option value="hardware">RTS/CTS</option>
                 </select>
             </div>
-
+            <div class="col-md-4">
+                <label for="intervalMs">Chu kỳ gửi (ms)</label>
+                <input type="number" id="intervalMs" class="form-control" value="1000">
+            </div>
             <div class="col-12 d-flex gap-2">
-                <button id="connectButton" class="btn btn-primary">Chọn Cổng nối tiếp</button>
-                <button id="disconnectButton" class="btn btn-danger" disabled>Ngắt kết nối</button>
-                <button id="clearButton" class="btn btn-warning">XỚ màn hình</button>
+                <button id="connectButton" class="btn btn-primary">Kết nối</button>
+                <button id="disconnectButton" class="btn btn-danger" disabled>Ngắt</button>
+                <button id="clearButton" class="btn btn-warning">Xóa màn hình</button>
+                <button id="saveButton" class="btn btn-secondary">Lưu</button>
+                <label class="ms-auto"><input type="checkbox" id="darkMode"> Dark Mode</label>
             </div>
         </div>
 
         <textarea id="serialOutput" class="form-control mt-3" readonly></textarea>
 
         <div class="input-group mt-3">
-            <input type="text" id="serialInput" class="form-control" placeholder="Nhập lệnh...">
+            <input type="text" id="serialInput" class="form-control" placeholder="Nhập lệnh gửi...">
             <button id="sendButton" class="btn btn-success">Gửi</button>
+            <button id="autoSendButton" class="btn btn-info">Tự động gửi</button>
+            <button id="stopSendButton" class="btn btn-outline-danger">Dừng</button>
         </div>
 
         <div class="mt-3 d-flex align-items-center gap-3">
-            <button id="saveButton" class="btn btn-secondary">💾 Lưu dữ liệu</button>
             <select id="dataFormat" class="form-select w-auto">
                 <option value="ascii">ASCII</option>
                 <option value="hex">HEX</option>
                 <option value="bin">BIN</option>
             </select>
             <label><input type="checkbox" id="autoScroll" checked> Auto Scroll</label>
-            <label><input type="checkbox" id="darkMode"> Dark Mode</label>
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script>
+        let port;
+        let reader;
+        let isReading = false;
+        let sendInterval = null;
+
+        async function getSerialOptions() {
+            return {
+                baudRate: parseInt(document.getElementById("baudRate").value),
+                dataBits: parseInt(document.getElementById("dataBits").value),
+                stopBits: parseInt(document.getElementById("stopBits").value),
+                parity: document.getElementById("parity").value,
+                flowControl: document.getElementById("flowControl").value
+            };
+        }
+
+        document.getElementById("connectButton").addEventListener("click", async () => {
+            try {
+                const options = await getSerialOptions();
+                port = await navigator.serial.requestPort();
+                await port.open(options);
+
+                document.getElementById("disconnectButton").disabled = false;
+                document.getElementById("connectButton").disabled = true;
+                readSerialData();
+            } catch (err) {
+                alert("Lỗi kết nối: " + err.message);
+            }
+        });
+
+        document.getElementById("disconnectButton").addEventListener("click", async () => {
+            isReading = false;
+            if (reader) await reader.cancel();
+            if (port && port.readable) await port.close();
+
+            document.getElementById("connectButton").disabled = false;
+            document.getElementById("disconnectButton").disabled = true;
+        });
+
+        async function readSerialData() {
+            isReading = true;
+            const textDecoder = new TextDecoderStream();
+            port.readable.pipeTo(textDecoder.writable);
+            reader = textDecoder.readable.getReader();
+            const output = document.getElementById("serialOutput");
+            const maxLength = 10000;
+
+            try {
+                while (isReading) {
+                    const { value, done } = await reader.read();
+                    if (done || !value) break;
+                    const formatted = formatData(value);
+                    output.value += formatted + "\n";
+                    if (output.value.length > maxLength) {
+                        output.value = output.value.slice(-maxLength);
+                    }
+                    if (document.getElementById("autoScroll").checked) {
+                        output.scrollTop = output.scrollHeight;
+                    }
+                }
+            } catch (err) {
+                console.error("Lỗi đọc dữ liệu:", err);
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+        function formatData(data) {
+            const format = document.getElementById("dataFormat").value;
+            if (format === "hex") {
+                return [...data].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
+            } else if (format === "bin") {
+                return [...data].map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join(' ');
+            }
+            return data;
+        }
+
+        document.getElementById("sendButton").addEventListener("click", async () => {
+            await sendSerialData();
+        });
+
+        document.getElementById("autoSendButton").addEventListener("click", () => {
+            const interval = parseInt(document.getElementById("intervalMs").value);
+            if (isNaN(interval) || interval <= 0) {
+                alert("Khoảng thời gian gửi không hợp lệ!");
+                return;
+            }
+            if (!port || !port.writable) {
+                alert("Cổng Serial chưa sẵn sàng!");
+                return;
+            }
+            sendInterval = setInterval(sendSerialData, interval);
+        });
+
+        document.getElementById("stopSendButton").addEventListener("click", () => {
+            clearInterval(sendInterval);
+        });
+
+        async function sendSerialData() {
+            const data = document.getElementById("serialInput").value.trim();
+            if (!data || !port || !port.writable) return;
+            const encoder = new TextEncoder();
+            const writer = port.writable.getWriter();
+            await writer.write(encoder.encode(data + "\n"));
+            writer.releaseLock();
+        }
+
+        document.getElementById("saveButton").addEventListener("click", () => {
+            const data = document.getElementById("serialOutput").value;
+            const blob = new Blob([data], { type: "text/plain" });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "serial_log.txt";
+            a.click();
+        });
+
+        document.getElementById("clearButton").addEventListener("click", () => {
+            document.getElementById("serialOutput").value = "";
+        });
+
+        document.getElementById("darkMode").addEventListener("change", () => {
+            document.body.classList.toggle("dark-mode");
+        });
+    </script>
 </body>
 </html>
